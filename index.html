@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MP3 WAV區間音量調整</title>
+    <!-- 引入 LAME.js 用於 MP3 編碼 -->
+    <script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+        :root {
+            --bg-color: #0b0c10;
+            --panel-color: #1f2833;
+            --text-color: #66fcf1;
+            --accent-color: #45a29e;
+            --alert-color: #ff3b3f;
+            --grid-color: rgba(69, 162, 158, 0.1);
+            --waveform-color: #45a29e;
+            --selection-color: rgba(255, 59, 63, 0.3);
+            --cursor-color: #fff;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image: 
+                linear-gradient(var(--grid-color) 1px, transparent 1px),
+                linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+            background-size: 20px 20px;
+            color: var(--text-color);
+            font-family: 'Share Tech Mono', 'Consolas', monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            user-select: none;
+        }
+
+        .device-container {
+            width: 95%;
+            max-width: 800px;
+            background: var(--panel-color);
+            border: 2px solid var(--accent-color);
+            box-shadow: 0 0 20px rgba(102, 252, 241, 0.2);
+            padding: 2px;
+            position: relative;
+        }
+
+        .header-bar {
+            background: var(--accent-color);
+            color: #000;
+            padding: 5px 15px;
+            font-weight: bold;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .panel-body {
+            padding: 20px;
+            display: grid;
+            gap: 15px;
+        }
+
+        .waveform-wrapper {
+            position: relative;
+            width: 100%;
+            height: 180px;
+            background: #000;
+            border: 1px solid #333;
+            cursor: crosshair;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .control-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .control-group {
+            position: relative;
+        }
+
+        label {
+            display: block;
+            font-size: 0.8rem;
+            color: var(--accent-color);
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+
+        input[type="number"], input[type="file"] {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--accent-color);
+            color: #fff;
+            padding: 10px;
+            font-family: 'Share Tech Mono', monospace;
+            box-sizing: border-box;
+            outline: none;
+            transition: all 0.3s;
+        }
+
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 20px;
+            width: 10px;
+            background: var(--text-color);
+            cursor: pointer;
+            margin-top: -8px;
+            box-shadow: 0 0 5px #fff;
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: var(--accent-color);
+        }
+
+        .btn-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        button {
+            padding: 15px;
+            border: 1px solid var(--text-color);
+            background: transparent;
+            color: var(--text-color);
+            font-family: 'Share Tech Mono', monospace;
+            font-size: 1rem;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: all 0.2s;
+            position: relative;
+        }
+
+        button:hover {
+            background: var(--text-color);
+            color: #000;
+            box-shadow: 0 0 15px var(--text-color);
+        }
+
+        button:disabled {
+            border-color: #555;
+            color: #555;
+            cursor: not-allowed;
+            background: transparent;
+        }
+
+        .status-line {
+            font-size: 0.75rem;
+            color: var(--accent-color);
+            border-top: 1px dashed var(--accent-color);
+            padding-top: 10px;
+            min-height: 1.2em;
+        }
+
+        .screws {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #333;
+            box-shadow: inset 1px 1px 2px #000;
+            z-index: 2;
+        }
+        .tl { top: 5px; left: 5px; }
+        .tr { top: 5px; right: 5px; }
+        .bl { bottom: 5px; left: 5px; }
+        .br { bottom: 5px; right: 5px; }
+
+        #progressBar {
+            width: 0%;
+            height: 2px;
+            background: var(--alert-color);
+            transition: width 0.1s;
+            position: absolute;
+            bottom: 0;
+            left: 0;
+        }
+    </style>
+</head>
+<body>
+
+<div class="device-container">
+    <div class="screws tl"></div>
+    <div class="screws tr"></div>
+    <div class="screws bl"></div>
+    <div class="screws br"></div>
+    <div id="progressBar"></div>
+
+    <div class="header-bar">
+        <span>MP3 WAV區間音量調整 V3.3 CREATOR:RANDY CHEN</span>
+        <span>STATUS: ONLINE</span>
+    </div>
+
+    <div class="panel-body">
+        
+        <div class="control-group">
+            <label>1. IMPORT_AUDIO [MP3/WAV]</label>
+            <input type="file" id="audioInput" accept="audio/*">
+        </div>
+
+        <div class="control-group">
+            <label>2. SELECT_REGION (DRAG ON WAVEFORM)</label>
+            <div class="waveform-wrapper" id="waveContainer">
+                <canvas id="waveCanvas"></canvas>
+            </div>
+        </div>
+
+        <div class="control-row">
+            <div class="control-group">
+                <label>START (SEC)</label>
+                <input type="number" id="startTime" value="0.0" step="0.1" min="0">
+            </div>
+            <div class="control-group">
+                <label>END (SEC)</label>
+                <input type="number" id="endTime" value="0.0" step="0.1" min="0">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>TARGET_VOLUME (RELATIVE % OF ORIGINAL)</label>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="range" id="volumeSlider" min="0" max="200" value="100">
+                <span id="volValue" style="width: 50px; text-align: right;">100%</span>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>AMPLITUDE LIMIT (LIMIT PEAK TO % OF FULL SCALE)</label>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <input type="range" id="limitSlider" min="10" max="100" value="100">
+                <span id="limitValue" style="width: 50px; text-align: right;">100%</span>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button id="previewBtn" onclick="togglePreview()">
+                ▶ PREVIEW
+            </button>
+            <button id="exportBtn" onclick="startExportMP3()" disabled>
+                ⭳ EXPORT MP3
+            </button>
+        </div>
+
+        <div class="status-line" id="statusText">
+            > SYSTEM_READY. AWAITING_DATA...
+        </div>
+    </div>
+</div>
+
+<script>
+    // ---------------------------------------------------------
+    // CONFIG & STATE
+    // ---------------------------------------------------------
+    document.addEventListener('contextmenu', e => e.preventDefault());
+
+    let audioCtx;
+    let audioBuffer; 
+    let sourceNode;
+    let gainNode;
+    let dynamicsNode; 
+    let isPlaying = false;
+    let playbackStartTime = 0; 
+    
+    const canvas = document.getElementById('waveCanvas');
+    const ctx = canvas.getContext('2d');
+    const waveContainer = document.getElementById('waveContainer');
+    const statusEl = document.getElementById('statusText');
+    
+    let isDragging = false;
+
+    // ---------------------------------------------------------
+    // INITIALIZATION & EVENTS
+    // ---------------------------------------------------------
+    
+    function updateStatus(text) {
+        if (!statusEl) return;
+        statusEl.innerText = text;
+        statusEl.style.opacity = 0.5;
+        setTimeout(() => statusEl.style.opacity = 1, 100);
+    }
+
+    function resizeCanvas() {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = waveContainer.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.scale(dpr, dpr);
+        drawWaveform(); 
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    document.getElementById('volumeSlider').addEventListener('input', (e) => {
+        document.getElementById('volValue').innerText = e.target.value + "%";
+        if (isPlaying) updateLiveParams();
+        drawWaveform();
+    });
+
+    document.getElementById('limitSlider').addEventListener('input', (e) => {
+        document.getElementById('limitValue').innerText = e.target.value + "%";
+        if (isPlaying) updateLiveParams();
+        drawWaveform(); // 即時更新虛線位置
+    });
+
+    document.getElementById('audioInput').addEventListener('change', async function(e) {
+        if(e.target.files.length === 0) return;
+        
+        const file = e.target.files[0];
+        updateStatus("> ANALYZING_AUDIO_DATA...");
+        document.getElementById('exportBtn').disabled = true;
+
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+        try {
+            const arrayBuffer = await file.arrayBuffer();
+            audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+            
+            updateStatus(`> LOADED: ${file.name} (${audioBuffer.duration.toFixed(1)}s)`);
+            document.getElementById('exportBtn').disabled = false;
+            
+            const mid = audioBuffer.duration / 2;
+            setSelection(mid - 2, mid + 2);
+            drawWaveform();
+
+        } catch (err) {
+            updateStatus("> ERROR: DECODE_FAILED.");
+        }
+    });
+
+    // ---------------------------------------------------------
+    // INTERACTION
+    // ---------------------------------------------------------
+    
+    waveContainer.addEventListener('mousedown', (e) => {
+        if(!audioBuffer) return;
+        isDragging = true;
+        const rect = waveContainer.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const time = (x / rect.width) * audioBuffer.duration;
+        document.getElementById('startTime').value = time.toFixed(2);
+        document.getElementById('endTime').value = time.toFixed(2);
+        drawWaveform();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if(!isDragging || !audioBuffer) return;
+        const rect = waveContainer.getBoundingClientRect();
+        let x = e.clientX - rect.left;
+        x = Math.max(0, Math.min(x, rect.width));
+        const time = (x / rect.width) * audioBuffer.duration;
+        document.getElementById('endTime').value = time.toFixed(2);
+        drawWaveform();
+    });
+
+    window.addEventListener('mouseup', () => {
+        if(isDragging) {
+            isDragging = false;
+            validateTimeInputs();
+            drawWaveform();
+        }
+    });
+
+    document.getElementById('startTime').addEventListener('change', () => { validateTimeInputs(); drawWaveform(); });
+    document.getElementById('endTime').addEventListener('change', () => { validateTimeInputs(); drawWaveform(); });
+
+    function validateTimeInputs() {
+        let s = parseFloat(document.getElementById('startTime').value);
+        let e = parseFloat(document.getElementById('endTime').value);
+        if (s > e) { const temp = s; s = e; e = temp; }
+        if(audioBuffer) {
+             s = Math.max(0, Math.min(audioBuffer.duration, s));
+             e = Math.max(0, Math.min(audioBuffer.duration, e));
+        }
+        document.getElementById('startTime').value = s.toFixed(2);
+        document.getElementById('endTime').value = e.toFixed(2);
+    }
+
+    function setSelection(start, end) {
+        document.getElementById('startTime').value = start.toFixed(2);
+        document.getElementById('endTime').value = end.toFixed(2);
+    }
+
+    // ---------------------------------------------------------
+    // DRAWING LOGIC (With Limit Lines)
+    // ---------------------------------------------------------
+
+    function drawWaveform() {
+        const width = canvas.width / (window.devicePixelRatio||1);
+        const height = canvas.height / (window.devicePixelRatio||1);
+        ctx.clearRect(0, 0, width, height);
+
+        if(!audioBuffer) {
+            ctx.strokeStyle = '#333';
+            ctx.beginPath(); ctx.moveTo(0, height/2); ctx.lineTo(width, height/2); ctx.stroke();
+            return;
+        }
+
+        // 1. 波形
+        const data = audioBuffer.getChannelData(0);
+        const step = Math.ceil(data.length / width);
+        const amp = height / 2;
+        ctx.fillStyle = '#45a29e';
+        for(let i=0; i < width; i++) {
+            let min = 1.0, max = -1.0;
+            for (let j=0; j<step; j++) {
+                const datum = data[(i*step)+j]; 
+                if (datum < min) min = datum;
+                if (datum > max) max = datum;
+            }
+            ctx.fillRect(i, (1+min)*amp, 1, Math.max(1, (max-min)*amp));
+        }
+
+        // 2. 選取區間背景
+        const startT = parseFloat(document.getElementById('startTime').value);
+        const endT = parseFloat(document.getElementById('endTime').value);
+        const duration = audioBuffer.duration;
+        const startX = (startT / duration) * width;
+        const endX = (endT / duration) * width;
+        const selWidth = endX - startX;
+
+        ctx.fillStyle = 'rgba(255, 59, 63, 0.25)';
+        ctx.fillRect(startX, 0, selWidth, height);
+
+        // 3. 震幅限制輔助線 (僅在選取區間顯示)
+        const limitPercent = parseInt(document.getElementById('limitSlider').value) / 100;
+        const limitYTop = (1 - limitPercent) * amp;
+        const limitYBottom = (1 + limitPercent) * amp;
+
+        ctx.setLineDash([5, 5]); // 設定虛線
+        ctx.strokeStyle = 'rgba(255, 59, 63, 0.8)';
+        ctx.beginPath();
+        // 上限制線
+        ctx.moveTo(startX, limitYTop); ctx.lineTo(endX, limitYTop);
+        // 下限制線
+        ctx.moveTo(startX, limitYBottom); ctx.lineTo(endX, limitYBottom);
+        ctx.stroke();
+        ctx.setLineDash([]); // 重設
+
+        // 4. 選取框外框
+        ctx.strokeStyle = '#ff3b3f';
+        ctx.strokeRect(startX, 0, selWidth, height);
+    }
+
+    function animatePlayback() {
+        if(!isPlaying) return;
+        drawWaveform();
+        const width = canvas.width / (window.devicePixelRatio||1);
+        const height = canvas.height / (window.devicePixelRatio||1);
+        const currentT = audioCtx.currentTime - playbackStartTime;
+        if(currentT > audioBuffer.duration) { stopAudio(); return; }
+        const x = (currentT / audioBuffer.duration) * width;
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, height); ctx.stroke();
+        ctx.lineWidth = 1;
+        requestAnimationFrame(animatePlayback);
+    }
+
+    // ---------------------------------------------------------
+    // AUDIO ENGINE
+    // ---------------------------------------------------------
+
+    function togglePreview() {
+        if(!audioBuffer) return;
+        if(isPlaying) stopAudio(); else playAudio();
+    }
+
+    function playAudio() {
+        sourceNode = audioCtx.createBufferSource();
+        sourceNode.buffer = audioBuffer;
+        gainNode = audioCtx.createGain();
+        dynamicsNode = audioCtx.createDynamicsCompressor();
+        
+        dynamicsNode.knee.value = 0; 
+        dynamicsNode.ratio.value = 20; 
+        dynamicsNode.attack.value = 0.003; 
+        dynamicsNode.release.value = 0.25;
+
+        applyParamsCurve(gainNode, dynamicsNode, audioCtx.currentTime);
+
+        sourceNode.connect(gainNode);
+        gainNode.connect(dynamicsNode);
+        dynamicsNode.connect(audioCtx.destination);
+
+        sourceNode.start(0);
+        playbackStartTime = audioCtx.currentTime;
+        isPlaying = true;
+        document.getElementById('previewBtn').innerText = "■ STOP";
+        animatePlayback();
+    }
+
+    function stopAudio() {
+        if(sourceNode) { try { sourceNode.stop(); } catch(e){} sourceNode = null; }
+        isPlaying = false;
+        document.getElementById('previewBtn').innerText = "▶ PREVIEW";
+        drawWaveform();
+    }
+
+    function updateLiveParams() {
+        if (!gainNode || !dynamicsNode) return;
+        gainNode.gain.cancelScheduledValues(audioCtx.currentTime);
+        dynamicsNode.threshold.cancelScheduledValues(audioCtx.currentTime);
+        applyParamsCurve(gainNode, dynamicsNode, playbackStartTime);
+    }
+
+    function applyParamsCurve(gNode, dNode, startTimeCtx) {
+        const startSec = parseFloat(document.getElementById('startTime').value);
+        const endSec = parseFloat(document.getElementById('endTime').value);
+        const targetVolRatio = parseInt(document.getElementById('volumeSlider').value) / 100;
+        const limitPercent = parseInt(document.getElementById('limitSlider').value) / 100;
+        
+        const limitDB = limitPercent >= 0.99 ? 0 : 20 * Math.log10(limitPercent);
+        const fade = 0.03; 
+
+        gNode.gain.setValueAtTime(1, startTimeCtx);
+        gNode.gain.setTargetAtTime(targetVolRatio, startTimeCtx + startSec, fade);
+        gNode.gain.setTargetAtTime(1, startTimeCtx + endSec, fade);
+
+        dNode.threshold.setValueAtTime(0, startTimeCtx);
+        dNode.threshold.setTargetAtTime(limitDB, startTimeCtx + startSec, fade);
+        dNode.threshold.setTargetAtTime(0, startTimeCtx + endSec, fade);
+    }
+
+    // ---------------------------------------------------------
+    // MP3 EXPORT
+    // ---------------------------------------------------------
+
+    async function startExportMP3() {
+        if(!audioBuffer) return;
+        const btn = document.getElementById('exportBtn');
+        btn.disabled = true;
+        updateStatus("> RENDERING...");
+
+        const offlineCtx = new OfflineAudioContext(
+            audioBuffer.numberOfChannels,
+            audioBuffer.length,
+            audioBuffer.sampleRate
+        );
+        
+        const source = offlineCtx.createBufferSource();
+        source.buffer = audioBuffer;
+        const gain = offlineCtx.createGain();
+        const dynamics = offlineCtx.createDynamicsCompressor();
+        
+        dynamics.knee.value = 0;
+        dynamics.ratio.value = 20;
+        dynamics.attack.value = 0.003;
+        dynamics.release.value = 0.25;
+
+        applyParamsCurve(gain, dynamics, 0); 
+        
+        source.connect(gain);
+        gain.connect(dynamics);
+        dynamics.connect(offlineCtx.destination);
+        source.start(0);
+        
+        const renderedBuffer = await offlineCtx.startRendering();
+        updateStatus("> ENCODING_MP3...");
+        setTimeout(() => encodeMP3(renderedBuffer), 100);
+    }
+
+    function encodeMP3(buffer) {
+        const channels = buffer.numberOfChannels;
+        const sampleRate = buffer.sampleRate;
+        const mp3encoder = new lamejs.Mp3Encoder(channels, sampleRate, 128);
+        const mp3Data = [];
+        const leftData = buffer.getChannelData(0);
+        const rightData = channels > 1 ? buffer.getChannelData(1) : leftData;
+        const sampleBlockSize = 1152;
+        
+        for (let i = 0; i < leftData.length; i += sampleBlockSize) {
+            const leftInt16 = floatTo16BitPCM(leftData.subarray(i, i + sampleBlockSize));
+            const rightInt16 = floatTo16BitPCM(rightData.subarray(i, i + sampleBlockSize));
+            const mp3buf = mp3encoder.encodeBuffer(leftInt16, rightInt16);
+            if (mp3buf.length > 0) mp3Data.push(mp3buf);
+        }
+        const mp3buf = mp3encoder.flush();
+        if (mp3buf.length > 0) mp3Data.push(mp3buf);
+
+        const blob = new Blob(mp3Data, { type: 'audio/mp3' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `PROCESSED_${Date.now()}.mp3`;
+        link.click();
+
+        updateStatus("> EXPORT_DONE.");
+        document.getElementById('exportBtn').disabled = false;
+    }
+
+    function floatTo16BitPCM(input) {
+        const output = new Int16Array(input.length);
+        for (let i = 0; i < input.length; i++) {
+            const s = Math.max(-1, Math.min(1, input[i]));
+            output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+        }
+        return output;
+    }
+</script>
+</body>
+</html>
